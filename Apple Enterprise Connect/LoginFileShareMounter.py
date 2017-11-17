@@ -6,6 +6,7 @@ import subprocess
 import sys
 import platform
 import syslog
+import os.path
 from SystemConfiguration import SCDynamicStoreCopyConsoleUser
 from distutils.version import StrictVersion
 
@@ -15,14 +16,10 @@ import objc, CoreFoundation, Foundation
 from CoreFoundation import CFPreferencesCopyAppValue
 
 #############################################
-##### Server Settings
-ldap_url = 'ldap://COMPANY.ADLDAP.COM'
-base_dn = 'DC=ACTIVE,DC=DIRECTORY,DC=com'
-
 ##### File Share Settings
 con_type = 'smb://'
 g_drive = '/FOLDER'
-
+    
 ##### AD Group and Path
 ad_groups = {
     #'AD GROUP' : 'NETWORK PATH',
@@ -30,17 +27,11 @@ ad_groups = {
     'SECURITY-GROUP2'       :   'SERVER-PATH' + g_drive + '/MIS_DEPT'
 }
 
-##### Enterprise Connect profile settings
-"""
-    I'm pushing these keys as part of the EC mobileconfig profile from MDM
-"""
-profile_domain = 'com.apple.Enterprise-Connect'
-profile_key = 'userPrincipalName'
-
 ##### LOG SETTINGS
-
 log_name = 'COMPANY:FileShareMounter'
 
+##### Enterprise-Connect Plist File Name
+plistFileName = 'com.apple.Enterprise-Connect.plist'
 #############################################
 
 syslog.openlog(log_name)
@@ -52,6 +43,13 @@ def log(message):
 
 #get version of macOS
 mac_version = platform.mac_ver()[0]
+
+# Get User and domain info from Enterprise Connect
+username = sys.argv[1]
+ldap_url = 'ldap://' + sys.argv[2]
+
+plistFile = str(os.path.expanduser('~') + '/Library/Preferences/' + plistFileName)
+base_dn = str(subprocess.check_output(['defaults','read',plistFile,'defaultNamingContext'])).rstrip()
 
 class attrdict(dict): 
     __getattr__ = dict.__getitem__
@@ -93,16 +91,12 @@ def mount_share(share_path):
     # Return the mountpath
     return str(output[0])
     
-###   
+###
 
-# get the AD username from the enterprise connect profile
-username = CFPreferencesCopyAppValue(profile_key, profile_domain)
-
-log('Username found: ' + username)
+log('Finding groups for ' + username + ' on domain ' + ldap_url)
 
 # find what groups they are a part of
-#groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', 'ldap://dc.my.domain.com', '-b', 'dc=my,dc=domain,dc=com', '(&(objectCategory=Person)(objectClass=User)(sAMAccountName={0}))'.format(username), 'memberOf', '2>/dev/null'])
-groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', ldap_url, '-b', base_dn, '(&(objectCategory=Person)(objectClass=User)(userPrincipalName={0}))'.format(username), 'memberOf', '2>/dev/null'])
+groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', ldap_url, '-b', base_dn, '(&(objectCategory=Person)(objectClass=User)(sAMAccountName={0}))'.format(username), 'memberOf', '2>/dev/null'])
 
 # clean up the output of the ldapsearch to end up with a list of group names
 memberOf = groupMembership.splitlines()
@@ -120,3 +114,5 @@ for group, path in ad_groups.iteritems():
     if group in groups:
         log('Group Found: ' + group + ' ==> ' + con_type + path)
         log(mount_share(con_type + path))
+
+log('Script Complete')
