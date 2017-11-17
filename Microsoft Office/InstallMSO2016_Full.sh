@@ -43,8 +43,9 @@ DOWNLOAD_URLS=( \
 MAU_PATH="/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app"
 SECOND_MAU_PATH="/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app/Contents/MacOS/Microsoft AU Daemon.app"
 INSTALLER_TARGET="LocalSystem"
+LOG_NAME="COMPANY:ChromeInstaller"
 
-syslog -s -l notice "MSOFFICE2016 - Starting Download/Install sequence."
+logger -t $LOG_NAME "Starting Download/Install sequence."
 
 ## Turn on a case-insensitive matching
 shopt -s nocasematch
@@ -99,39 +100,39 @@ for packageName in "${OFFICE_PKGS[@]}"; do
       fi
     ;;
     *)                  #Just in case
-      syslog -s -l warning "MSOFFICE2016 - Invalid Package Name: - $packageName"
+      logger -t $LOG_NAME "Invalid Package Name: - $packageName"
       continue
     ;;
   esac
 
   if [ $skipInstall = true ]; then
-    syslog -s -l notice "MSOFFICE2016 - Skipping Package: $packageName - Already Installed"
+    logger -t $LOG_NAME "Skipping Package: $packageName - Already Installed"
     continue
   fi
 
   finalDownloadUrl=$(curl "$downloadUrl" -s -L -I -o /dev/null -w '%{url_effective}')
   pkgName=$(printf "%s" "${finalDownloadUrl[@]}" | sed 's@.*/@@')
   pkgPath="/tmp/$pkgName"
-  syslog -s -l notice "MSOFFICE2016 - Downloading $pkgName"
+  logger -t $LOG_NAME "Downloading $pkgName"
   # modified to attempt restartable downloads and prevent curl output to stderr
   until curl --retry 1 --retry-max-time 180 --max-time 180 --fail --silent -L -C - "$finalDownloadUrl" -o "$pkgPath"; do
   # Retries if the download takes more than 3 minutes and/or times out/fails
-    syslog -s -l warning "MSOFFICE2016 - Preparing to re-try failed download: $pkgName"
+    logger -t $LOG_NAME "Preparing to re-try failed download: $pkgName"
     sleep 10
   done
-  syslog -s -l warning "MSOFFICE2016 - Installing $pkgName"
+  logger -t $LOG_NAME "Installing $pkgName"
   # run installer with stderr redirected to dev null
   installerExitCode=1
   while [ "$installerExitCode" -ne 0 ]; do
     sudo /usr/sbin/installer -pkg "$pkgPath" -target "$INSTALLER_TARGET" > /dev/null 2>&1
     installerExitCode=$?
     if [ "$installerExitCode" -ne 0 ]; then
-      syslog -s -l error "MSOFFICE2016 - Failed to install: $pkgPath"
-      syslog -s -l error "MSOFFICE2016 - Installer exit code: $installerExitCode"
+      logger -t $LOG_NAME "Failed to install: $pkgPath"
+      logger -t $LOG_NAME "Installer exit code: $installerExitCode"
     fi
   done
   if [ "$installerExitCode" -eq 0 ]; then
-    syslog -s -l notice "MSOFFICE2016 - Successfully Installed $pkgName"
+    logger -t $LOG_NAME "Successfully Installed $pkgName"
   fi
   rm "$pkgPath"
 
@@ -141,11 +142,11 @@ done
 shopt -u nocasematch
 
 # -- Modified from Script originally published at https://gist.github.com/erikng/7cede5be1c0ae2f85435
-syslog -s -l error "MSOFFICE2016 - Registering Microsoft Auto Update (MAU)"
+logger -t $LOG_NAME "Registering Microsoft Auto Update (MAU)"
 if [ -e "$MAU_PATH" ]; then
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -R -f -trusted "$MAU_PATH"
   if [ -e "$SECOND_MAU_PATH" ]; then
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -R -f -trusted "$SECOND_MAU_PATH"
   fi
 fi
-syslog -s -l notice "MSOFFICE2016 - SCRIPT COMPLETE"
+logger -t $LOG_NAME "SCRIPT COMPLETE"
