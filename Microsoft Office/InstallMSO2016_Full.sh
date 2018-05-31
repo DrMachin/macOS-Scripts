@@ -43,7 +43,7 @@ DOWNLOAD_URLS=( \
 MAU_PATH="/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app"
 SECOND_MAU_PATH="/Library/Application Support/Microsoft/MAU2.0/Microsoft AutoUpdate.app/Contents/MacOS/Microsoft AU Daemon.app"
 INSTALLER_TARGET="LocalSystem"
-LOG_NAME="COMPANY:ChromeInstaller"
+LOG_NAME="COMPANY:MSOfficeInstaller"
 
 logger -t $LOG_NAME "Starting Download/Install sequence."
 
