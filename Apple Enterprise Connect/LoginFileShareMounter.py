@@ -48,6 +48,12 @@ mac_version = platform.mac_ver()[0]
 username = sys.argv[1]
 ldap_url = 'ldap://' + sys.argv[2]
 
+# Check if username is UserPrincipleName or shortname
+if '@' in username:
+    userkey = 'userPrincipalName'
+else:
+    userkey = 'sAMAccountName'
+
 plistFile = str(os.path.expanduser('~') + '/Library/Preferences/' + plistFileName)
 base_dn = str(subprocess.check_output(['defaults','read',plistFile,'defaultNamingContext'])).rstrip()
 
@@ -96,7 +102,7 @@ def mount_share(share_path):
 log('Finding groups for ' + username + ' on domain ' + ldap_url)
 
 # find what groups they are a part of
-groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', ldap_url, '-b', base_dn, '(&(objectCategory=Person)(objectClass=User)(sAMAccountName={0}))'.format(username), 'memberOf', '2>/dev/null'])
+groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', ldap_url, '-b', base_dn, '(&(objectCategory=Person)(objectClass=User)({0}={1}))'.format(userkey, username), 'memberOf', '2>/dev/null'])
 
 # clean up the output of the ldapsearch to end up with a list of group names
 memberOf = groupMembership.splitlines()
@@ -116,3 +122,4 @@ for group, path in ad_groups.iteritems():
         log(mount_share(con_type + path))
 
 log('Script Complete')
+sys.exit(0)
