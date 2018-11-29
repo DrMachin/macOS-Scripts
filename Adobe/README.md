@@ -1,4 +1,4 @@
-# # Adobe
+# Adobe
 ## Much Cleaner Instructions:
 ---
 [Deploying Adobe Creative Cloud (CC) products with Workspace ONE UEM](https://github.com/vmwaresamples/AirWatch-samples/tree/master/macOS-Samples/3rd-Party_Software_Guidance/Adobe%20Products)
@@ -24,7 +24,7 @@ This does not currently work with AirWatch Munki. Maybe in the future...
     <string>uninstall_script</string>
 ```
 
-## ## Uninstalling
+## Uninstalling
 ---
 [Deploy packages for Adobe Creative Cloud - Uninstall](https://helpx.adobe.com/enterprise/package/help/deploying-packages.html#main-pars_header_802161715)
 [Sap Codes, Versions, and Platform IDs](https://helpx.adobe.com/enterprise/package/help/apps-deployed-without-their-base-versions.html)
