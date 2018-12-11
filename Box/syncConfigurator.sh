@@ -18,7 +18,6 @@ else
 fi
 echo
 if [[ -d $DEST ]]; then
-	#find . -name "*.mkv" -exec rsync -av --progress  {} [destination]. \;
 	find "${SOURCE}/" -name "*.ipsw" -exec rsync -av --progress {} "${DEST}/". \;
 else
 	echo Apple Configurator Firmware Cache Not Found
