@@ -1,12 +1,12 @@
 #!/usr/bin/python
-#serial_number=2017102501
+#serial_number=2018121801
 #serial above is yyyymmdd## for when the script is updated
+#Tested with Enterprise Connect v1.9.5
 
 import subprocess
 import sys
 import platform
 import syslog
-import os.path
 from SystemConfiguration import SCDynamicStoreCopyConsoleUser
 from distutils.version import StrictVersion
 
@@ -30,8 +30,11 @@ ad_groups = {
 ##### LOG SETTINGS
 log_name = 'COMPANY:FileShareMounter'
 
-##### Enterprise-Connect Plist File Name
+##### Enterprise Connect Settings
+## Plist File Name
 plistFileName = 'com.apple.Enterprise-Connect.plist'
+## Path to Enterprise Connect CLI
+_ECCL = '/Applications/Enterprise Connect.app/Contents/SharedSupport/eccl'
 #############################################
 
 syslog.openlog(log_name)
@@ -41,21 +44,16 @@ def log(message):
     if message is not None:
         syslog.syslog(syslog.LOG_ALERT, message)
 
-#get version of macOS
-mac_version = platform.mac_ver()[0]
+def eccl(*arg):
+    #Send commands to Enterprise Connect CLI
+    command = [_ECCL]
+    for x in arg:
+        command.append(x)
+    return subprocess.check_output(command).rstrip()
 
 # Get User and domain info from Enterprise Connect
-username = sys.argv[1]
-ldap_url = 'ldap://' + sys.argv[2]
-
-# Check if username is UserPrincipleName or shortname
-if '@' in username:
-    userkey = 'userPrincipalName'
-else:
-    userkey = 'sAMAccountName'
-
-plistFile = str(os.path.expanduser('~') + '/Library/Preferences/' + plistFileName)
-base_dn = str(subprocess.check_output(['defaults','read',plistFile,'defaultNamingContext'])).rstrip()
+username = eccl('-p', 'adUsername').split(' ')[1]
+ldap_url = eccl('-p', 'adDomain').split(' ')[1]
 
 class attrdict(dict): 
     __getattr__ = dict.__getitem__
@@ -102,18 +100,11 @@ def mount_share(share_path):
 log('Finding groups for ' + username + ' on domain ' + ldap_url)
 
 # find what groups they are a part of
-groupMembership = subprocess.check_output(['ldapsearch', '-LLL', '-Q', '-H', ldap_url, '-b', base_dn, '(&(objectCategory=Person)(objectClass=User)({0}={1}))'.format(userkey, username), 'memberOf', '2>/dev/null'])
+memberOf = eccl('-a', 'memberOf').splitlines()
 
-# clean up the output of the ldapsearch to end up with a list of group names
-memberOf = groupMembership.splitlines()
-grouplist = [x for x in memberOf if x.startswith('memberOf')]
-#print grouplist
-
-# groupList is our list of groups with their full DN -> memberOf: CN=GROUP1,OU=Distribution Lists,OU=Exchange,OU=US,DC=MY,DC=DOMAIN'
-# need to clean up the names
 groups = []
-for name in grouplist:
-	groups.append((name.split(',')[0])[13:])
+for item in memberOf:
+    groups.append((item.split(',')[0])[13:])
 
 for group, path in ad_groups.iteritems():
     # groups is a list of just the names i.e. groups = ['GROUP1', '', 'GROUP2', 'GROUP3']
