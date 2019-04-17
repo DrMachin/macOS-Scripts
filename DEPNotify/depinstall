@@ -1,0 +1,426 @@
+#!/bin/bash
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+# Variables
+DEP_NOTIFY_APP="/Applications/Utilities/DEPNotify.app"
+DEP_NOTIFY_CONFIG="/var/tmp/depnotify.log"
+DEP_NOTIFY_DONE="/var/tmp/com.depnotify.provisioning.done"
+DEP_NOTIFY_EULA="/var/tmp/com.depnotify.agreement.done"
+DEP_NOTIFY_DAEMON="/Library/LaunchDaemons/com.drm.launchdep.plist"
+TMP_DEBUG_LOG="/var/tmp/depNotifyDebug.log"
+ICONS="/var/tmp/icons"
+VIDEOS="/var/tmp/videos"
+COMPANY_TOS="/var/tmp/terms.rtf"
+HUB_URL="https://storage.googleapis.com/getwsone-com-prod/downloads/VMwareWorkspaceONEIntelligentHub.pkg"
+MUNKI_CATALOG="/Library/Application Support/AirWatch/Data/Munki/Managed Installs/catalogs/device_catalog.plist"
+SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+FINDER_PROCESS=$(pgrep -l "Finder")
+
+## Application Paths
+OUTLOOK_INSTALL="/Applications/Microsoft Outlook.app"
+ENTERPRISE_CONNECT="/Applications/Enterprise Connect.app"
+GLOBALPROTECT="/Applications/GlobalProtect.app"
+
+#CLI paths
+#Enterprise Connect
+eccl="/Applications/Enterprise Connect.app/Contents/SharedSupport/eccl"
+#Airport Utility
+airport="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+
+# The stuff AirWatch needs
+# AuthHeader uses Svc Acct
+
+## Prod ##
+AirWatchENV='cnXXX'
+AuthString='Basic AUTH_STRING'
+TenantCodeString='TENANT_API-CODE'
+
+# SerialNumber Of Device
+DeviceSerialNumber=$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}')
+
+#Get user principle name from profile
+function getUPN {
+  profiles -P -o stdout | grep -m 1 -oe UserName*.@*.*com | cut -d '"' -f 2
+}
+
+## Server Request functions
+function request_app {
+  echo "Sending request for ${1}" >> "$TMP_DEBUG_LOG"
+  #Format for request
+  appName=$(echo ${1} | sed 's/ /%20/g')
+  #Get App ID from server
+  appID=$(curl --silent --show-error -X GET "https://${AirWatchENV}.awmdm.com/api/mam/apps/search?type=app&applicationtype=internal&platform=appleosx&status=active&applicationname=${appName}" --header 'Authorization:'"$AuthString"'' --header 'Accept: application/json;version=2' --header '"$AuthString"' --header "Host: ${AirWatchENV}.awmdm.com" --header 'aw-tenant-code:'"$TenantCodeString"'' --header 'user-Agent: :Fiddler' | grep -Eo '"Value".\d*' | cut -d : -f 2)
+  #Send request for app
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url "https://${AirWatchENV}.awmdm.com/api/mam/apps/internal/${appID}/install" >> "$TMP_DEBUG_LOG"
+}
+
+function getUserName {
+  local username=$(getUPN)
+  echo $(curl --silent --show-error -X GET "https://cn432.awmdm.com/api/system/users/search?username=${username}" --header 'Authorization:'"$AuthString"'' --header "Host: ${AirWatchENV}.awmdm.com" --header 'aw-tenant-code:'"$TenantCodeString"'' --header 'user-Agent: :Fiddler') | grep -Eo "<CustomAttribute1>.*<\/CustomAttribute1>" | sed 's/<.*>\(.*\)<.*>/\1/'
+}
+
+function install_profile {
+  echo "Sending request for Profile ID: ${1}"
+  curl --header 'Authorization:'"$AuthString"'' --header 'aw-tenant-code:'"$TenantCodeString"'' --header "Content-Type: application/json" --header "Accept: application/json;version=1" --data '{"SerialNumber":"'"$DeviceSerialNumber"'"}' --url "https://${AirWatchENV}.awmdm.com/api/mdm/profiles/${1}/install" >> "$TMP_DEBUG_LOG"  
+}
+
+## DEPNotify screen functions
+## Functions to make changing the screens easier to manage
+function mainTitle { 
+  printf "Command: MainTitle: ${1}\n" >> $DEP_NOTIFY_CONFIG
+}
+
+function mainText {
+  printf "Command: MainText: ${1}\n" >> $DEP_NOTIFY_CONFIG
+}
+
+function status {
+  printf "Status: ${1}\n" >> $DEP_NOTIFY_CONFIG
+}
+
+function image {
+  echo "Command: Image: ${ICONS}/${1}" >> $DEP_NOTIFY_CONFIG
+}
+
+function video {
+  echo "Command: Video: ${VIDEOS}/${1}" >> $DEP_NOTIFY_CONFIG
+}
+
+function stepForward {
+  if [ -z ${1} ]; then step=1; fi
+  echo "Command: DeterminateManualStep: ${step}" >> $DEP_NOTIFY_CONFIG
+}
+
+function helpdesk_screen {
+  if [ $darkmode ]; then
+    echo "Command: Image: ${ICONS}/lts-white.png" >> $DEP_NOTIFY_CONFIG
+  else
+    echo "Command: Image: ${ICONS}/lts-blue.png" >> $DEP_NOTIFY_CONFIG
+  fi
+  mainTitle "Get Help When You Need It!"
+  mainText 'If you run into any issues, or if you have any questions, please call or send an email to the Service Desk.\\n\\nphone: 800-123-4567\\nemail: HELP@COMPANY.com'
+}
+
+# Download WS1 Hub ahead of time
+hubpkg="/var/tmp/VMwareWorkspaceONEIntelligentHub.pkg"
+# Delete installer if already present (MOSTLY FOR TESTING)
+rm -f $hubpkg
+# Retries if the download takes more than 3 minutes and/or times out/fails
+# Output error to stdout and to log file
+echo "Starting Hub Download" >> "$TMP_DEBUG_LOG"
+curl --retry 3 --retry-max-time 180 --max-time 180 --fail --silent --show-error -L -C - "$HUB_URL" -o $hubpkg 2>&1 | tee -a "$TMP_DEBUG_LOG"&
+hub_download=$!
+
+# Wait for Setup Assistant to finish
+until [ "$SETUP_ASSISTANT_PROCESS" = "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Setup Assistant Still Running. PID $SETUP_ASSISTANT_PROCESS." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    SETUP_ASSISTANT_PROCESS=$(pgrep -l "Setup Assistant")
+done
+
+# Wait for Finder - Helps if user is not DEP enrolled and has to log in
+until [ "$FINDER_PROCESS" != "" ]; do
+    echo "$(date "+%a %h %d %H:%M:%S"): Finder process not found. Assuming device is at login screen." >> "$TMP_DEBUG_LOG"
+    sleep 1
+    FINDER_PROCESS=$(pgrep -l "Finder")
+done
+
+# Getting current logged in user
+loggedInUser=$(python -c 'from SystemConfiguration import SCDynamicStoreCopyConsoleUser; import sys; username = (SCDynamicStoreCopyConsoleUser(None, None, None) or [None])[0]; username = [username,""][username in [u"loginwindow", None, u""]]; sys.stdout.write(username + "\n");')
+echo "Found User: ${loggedInUser}" >> "$TMP_DEBUG_LOG"
+# Remove old configs if they exist
+if [ -f "$DEP_NOTIFY_CONFIG" ]; then
+    rm "$DEP_NOTIFY_CONFIG"
+fi
+if [ -f "$DEP_NOTIFY_DONE" ]; then
+    rm "$DEP_NOTIFY_DONE"
+fi
+if [ -f "$DEP_NOTIFY_EULA" ]; then
+    rm "$DEP_NOTIFY_EULA"
+fi
+
+# Let's not go to sleep
+caffeinate -d -i -m -s -u &
+caffeinatepid=$!
+
+# Disable Software Updates during imaging and wait for user to be fully logged on
+softwareupdate --schedule off >> "$TMP_DEBUG_LOG"
+
+# Detect Dark Mode
+darkmode=$(sudo -u "$loggedInUser" defaults read -g AppleInterfaceStyle 2> /dev/null)
+
+# Configure DEPNotify
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify EULAMainTitle "Terms of Use"
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify EULASubTitle "Before we get started, you'll need to accept the Terms of Use."
+sudo -u "$loggedInUser" defaults write menu.nomad.DEPNotify pathToEULA "$COMPANY_TOS"
+
+# Set a main image
+if [ $darkmode ]; then
+  image "lts-white.png"
+else
+  image "lts-blue.png"
+fi
+
+mainTitle 'Welcome To Lennar!'
+
+# Set the Body Text
+mainText 'Thanks for choosing a Mac and being a little different :)\\n\\nWe want you to have a few applications and settings configured before you get started. This process normally takes about 30 minutes to complete depending on internet speed.\\n\\nPlease do not disconnect or shutdown your Mac during this process.'
+status " "
+echo "Command: ContinueButtonEULA: Continue" >> $DEP_NOTIFY_CONFIG
+
+# Open DepNotify
+echo "Launching DEPNotify" >> "$TMP_DEBUG_LOG"
+#sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args&
+sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args -fullScreen&
+
+# Wait for input file creation
+while [ ! -f "$DEP_NOTIFY_EULA" ];
+do
+  sleep 2
+done
+ls -l "$DEP_NOTIFY_EULA"
+
+# Rename the mac and flush DNS
+sudo scutil --set ComputerName "${DeviceSerialNumber}"
+sudo scutil --set LocalHostName "${DeviceSerialNumber}"
+sudo scutil --set HostName "${DeviceSerialNumber}"
+dscacheutil -flushcache
+
+# Set progress bar
+echo "Command: DeterminateManual: 10" >> $DEP_NOTIFY_CONFIG
+
+# Display Support Information
+helpdesk_screen
+
+status "Downloading Workspace One Intelligent Hub"
+#Hold just in case hub is still downloading
+while ps -p "$hub_download";
+do
+  sleep 2
+done
+status "Installing Workspace One Intelligent Hub"
+
+echo "Installing Hub" >> "$TMP_DEBUG_LOG"
+installer -package $hubpkg -target /
+stepForward
+sleep 30
+
+# Request First App. Also serves to kickstart server to push all auto deployed apps
+request_app "Enterprise Connect"
+status "Setting up Software Management"
+sleep 60
+
+# Let them know what's happening
+image "AppStore.png"
+mainTitle "Installing Applications"
+mainText "We are now going to install a few applications to get you started."
+status "Connecting to App Catalog"
+
+#Wait for catalog to come down during first sync.
+if [ ! -f "$MUNKI_CATALOG" ]; then
+  while [ ! -f "$MUNKI_CATALOG" ];
+    do
+      sleep 2
+    done
+fi
+ls -l "$MUNKI_CATALOG" >> "$TMP_DEBUG_LOG"
+
+stepForward
+status "We found some apps!"
+sleep 30
+
+#Launchpad info
+image "launchpad.png"
+mainTitle "Launchpad"
+mainText 'Clicking the Launchpad icon in the Dock will show you all your installed apps.\\n\\nYou can type the name of an app to find it in Launchpad, then press the Return key to open it. You can also drag your apps around to arrange and organize them into folders.'
+
+## GlobalProtect | Flash Player | splunk_forwarder | CylanceProtect
+status "We are installing a few applications now"
+sleep 60
+
+image "Catalog.png"
+mainTitle "Check out the App Catalog"
+mainText 'Additional software can be installed from the App Catalog located on your Dock.\\n\\nIf an app you need is not listed, please submit a ticket to the Service Desk HELP@COMPANY.com'
+stepForward
+
+# Send requests for next batch
+request_app "Microsoft Teams"
+request_app "Skype For Business"
+request_app "Chrome"
+
+status "A handy phone number to remember is 1-800-123-4567 for the Service Desk"
+sleep 45
+
+image "gp_icon.png"
+mainTitle "GlobalProtect"
+mainText 'Please make sure to login to the GlobalProtect app when prompted.\\n\\nThe GlobalProtect app helps keep your internet connection secure by allowing you to stay connected to the network and resources even when you are away from the office.\n\nCertain applications, such as Enterprise Connect, require you to be connected to the Lennar network in order to properly work.'
+sleep 60
+
+image "ec-logo.png"
+mainTitle "Enterprise Connect"
+mainText 'Enterprise Connect is a tool designed by Apple that keeps the account on your Mac in sync with your Network Account.\\n\\nIt will also notify you when your password is expiring and allow you to change it right from your desktop.'
+sleep 60
+
+helpdesk_screen
+sleep 30
+#Wait for Enterprise Connect to install (just in case)
+while [ ! -e "$ENTERPRISE_CONNECT" && ! -e "$GLOBALPROTECT" ];
+do
+  sleep 10
+done
+stepForward
+
+# Move corpnet to top of list
+/Library/Scripts/reorder_wifi.py
+
+image "office.png"
+mainTitle 'Installing Microsoft Office'
+mainText 'We are now going to install the Microsoft Office Suite.\\n\\nThe Office apps are rather large so we are going to download Microsoft Outlook first to get you going.'
+status "Requesting Microsoft Outlook"
+request_app "Microsoft Outlook"
+stepForward
+sleep 45
+
+mainText "After initial setup is complete, the remaining Office applications, Word, Excel, and Powerpoint, will install in the background."
+status "Downloading Microsoft Outlook"
+sleep 60
+#Get LDAP domain from installed profile
+LDAP=$(profiles -P -o stdout | grep adRealm | cut -d'"' -f 2)
+
+image "updates.png"
+mainTitle "Almost There"
+mainText 'While we wait for Outlook to download and install, we are going to set some other things up.\\n\\nFirst we need to enable Location Services for the Intelligent Hub. This will make sure that we place you in the right groups and you get the right settings.'
+sleep 45
+
+#Kill Fullscreen Window
+echo "Command: Quit" >> $DEP_NOTIFY_CONFIG
+rm -Rf $DEP_NOTIFY_CONFIG
+
+status "Status: Please enable location services to continue"
+video "Hub_Location.mp4"
+
+sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args&
+
+while [ `defaults read /var/db/locationd/clients.plist | grep com.airwatch.mac.agent -A 2 | grep Authorized | awk -F"=" '{print $2--}'` != 1 ];
+do
+  echo "Waiting for location services" >> "$TMP_DEBUG_LOG"
+  sleep 5
+done
+stepForward
+
+#if network is not reachable, walk user through globalprotect setup
+if ! ping ${LDAP} -W 10000 -o > /dev/null 2>&1; then
+  echo "Unable to reach ${LDAP}" >> "$TMP_DEBUG_LOG" 
+
+  adusername=$(getUserName)
+  if [ ! -x $adusername ]; then
+    message="Your username is ${adusername}"
+  else #just in case the attribute is empty or there's a server hickup
+    message="Your username is your first initial followed by your last name"
+  fi
+
+  image "gp_icon.png"
+  mainTitle "Connect to Network"
+  mainText 'Please login to GlobalProtect with your network credentials.\\n\\n'"${message}"'\\nYour network password is the same as your Okta and Email.'
+  status ' '
+  sleep 30
+
+  while [[ ! `ping ${LDAP} -W 10000 -o` ]];
+  do
+    sudo -u "$loggedInUser" open -a "$GLOBALPROTECT"
+    video "gp_login.mp4"
+    status "${message}"'. Your password is the same as your Okta and Email.'
+    sleep 30
+  done
+fi
+stepForward
+
+if [ `"$eccl" -p signedinStatus | awk -F": " '{print $2}'` != 'true' ]; then
+  image "ec-logo.png"
+  mainTitle "Enterprise Connect Setup"
+  mainText " "
+  status 'Please sign in to Enterprise Connect with your email and network password'
+  sleep 15
+
+  sudo -u "$loggedInUser" open -a "$ENTERPRISE_CONNECT"
+  video "ec_login.mp4"
+  while [ $("$eccl" -p signedinStatus | awk -F": " '{print $2}') != 'true' ];
+  do
+    sleep 2
+  done
+fi
+stepForward
+
+#Kill window and bring back fullscreen
+echo "Command: Quit" >> $DEP_NOTIFY_CONFIG
+rm -Rf $DEP_NOTIFY_CONFIG
+
+sudo -u "$loggedInUser" open -a "$DEP_NOTIFY_APP" --args -fullScreen&
+
+if [ ! -e "$OUTLOOK_INSTALL" ]; then
+  image "office.png"
+  mainTitle 'Installing Microsoft Outlook'
+  mainText 'Waiting for Outlook to complete installation'
+  status 'Downloading Outlook'
+  # Wait for Outlook to install
+  while [ ! -e "$OUTLOOK_INSTALL" ];
+  do
+    sleep 10
+  done
+fi
+
+#Force push correct exchange profile
+case $(getUPN) in
+  *"lennar.com") install_profile 73;;
+  *"sunstreet.com") install_profile 200;;
+  *"rialto"*".com") install_profile 113;;
+  *) echo "$(getUPN) Email Domain not recognized" >> "$TMP_DEBUG_LOG"
+esac
+
+
+# Install Updates
+image "updates.png"
+mainTitle "Installing Updates"
+mainText " "
+status "Checking for and installing any macOS updates"
+stepForward
+# Turn softwareupdate check back on
+softwareupdate --schedule on >> "$TMP_DEBUG_LOG"
+softwareupdate -ir
+sleep 20
+
+# Encrypt
+mainTitle "Wrapping things up"
+mainText 'The last step is to encrypt your mac. \\n\\nOnce this Window closes, you will be able to enter your password to start the encryption process and asked to restart your Mac'
+status " "
+## Send command to push Filevault profile
+install_profile "477"
+
+stepForward
+sleep 45
+
+#Queue up the other Office apps
+request_app "Microsoft Word"
+request_app "Microsoft Excel"
+request_app "Microsoft PowerPoint"
+request_app "Box Drive"
+
+# Allow sleep again
+kill "$caffeinatepid" >> "$TMP_DEBUG_LOG"
+
+# Quit
+echo "Quitting DEPNotify" >> "$TMP_DEBUG_LOG"
+echo "Command: ContinueButton: Finish" >> $DEP_NOTIFY_CONFIG
+
+echo "Cleaning up" >> "$TMP_DEBUG_LOG"
+# Remove DEPNotify and the logs
+rm -Rf $DEP_NOTIFY_CONFIG
+rm -Rf $DEP_NOTIFY_EULA
+rm -Rf $DEP_NOTIFY_APP
+rm -Rf $COMPANY_TOS
+rm -Rf $ICONS
+
+# Remove the Launch Daemon
+rm -Rf $DEP_NOTIFY_DAEMON
+
+exit 0
